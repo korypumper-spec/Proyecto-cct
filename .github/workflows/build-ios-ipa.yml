@@ -1,0 +1,68 @@
+name: Build iOS App (Offline Unsigned IPA)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Ensure offline bundle and Safari-compatible PDF worker exist
+        run: |
+          if [ ! -f public/data/normativa-offline.json ]; then
+            npm run ingest
+            npm run export:offline
+          fi
+          cp node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs public/pdf.worker.min.mjs
+
+      - name: Build web assets and sync Capacitor iOS
+        run: |
+          npm run build
+          npx cap sync ios
+
+      - name: Archive unsigned iOS app
+        working-directory: ios/App
+        run: |
+          xcodebuild \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/build/App.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: Package unsigned IPA
+        working-directory: ios/App
+        run: |
+          mkdir -p Payload
+          cp -r build/App.xcarchive/Products/Applications/App.app Payload/
+          zip -r normativa-imss-sntss-offline-unsigned.ipa Payload
+
+      - name: Upload iOS IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: normativa-imss-sntss-offline-ios-ipa
+          path: ios/App/normativa-imss-sntss-offline-unsigned.ipa
